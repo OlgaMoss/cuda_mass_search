@@ -1,221 +1,146 @@
-#include <stdio.h>
-//#include <omp.h>
-#include <string.h>
-#include <math.h>
-//#include "../common/common.h"
-#include <cuda_runtime.h>
+#include <iostream>
+#include <cstring>
+#include <fstream>
+#include "time.h"
 
+using namespace std;
 
-int compute_value(char *str, int length, int d, int q)
+void preKMP(char* pattern, int f[])
 {
-	int i = 0;
-	int p0 = 0;
-
-	for (i = 0; i < length; ++i) {
-		p0 = (d * p0 + (str[i] /*- '0'*/ )) % q;
-	}
-
-	return p0;
-}
-
-int rk_matcher(char *str, char *pattern, int d, int q)
-{
-	int i = 0, j = 0;
-	int str_length = strlen(str);
-	int pattern_length = strlen(pattern);
-	int p0 = 0;
-	int ts[str_length];
-
-	/* This code block prints what is inside the matrix
-	   for (i=0;i<num_cores;i++)
-	   {
-	   for (j=0;j<el_chunk_len;j++)
-	   if (tss[i][j]==0)
-	   printf("%c", '0');
-	   else
-	   printf("%c", tss[i][j]);
-	   printf("\n");
-	   }
-	 */
-
-	
-	p0 = compute_value(pattern, pattern_length, d, q);
-
-
-	ts[0] = compute_value(str, pattern_length, d, q);
-
-
-	int p = pow(d, pattern_length - 1);
-	for (i = 1; i < str_length - pattern_length + 1; i++) {
-		ts[i] = ((str[i + pattern_length - 1]) * p
-			 + (ts[i - 1] - (str[i - 1])) / d) % q;
-		/*      (ts[i - 1] * d -
-		   ((str[i - 1] - '0') * (int) pow(d,
-		   pattern_length))) % q +
-		   (str[i + pattern_length - 1]
-		   - '0') % q; */
-	}
-
-/*    for (i=0;i<str_length-pattern_length+1;i++)
+    int m = strlen(pattern), k;
+    f[0] = -1;
+    for (int i = 1; i < m; i++)
     {
-    	printf("%d ", ts[i]);
-    }*/
-
-	for (i = 0; i <= str_length - pattern_length + 1; ++i) {
-		if (ts[i] == p0) {
-			for (j = 0; j < pattern_length; ++j) {
-				if (pattern[j] != str[i + j]) {
-					break;
-				} else if (j == pattern_length - 1) {
-					printf("%d\n", i);
-				}
-			}
-		}
-	}
-
-	return 0;
-
-}
-
-__global__ void findHashes(char *d_css, int d_len, int *d_iss,
-			   int pattern_length, int d, /*int q,*/ int p)
-{
-	int i = 0;
-	int ind = d_len * threadIdx.x;
-	d_iss += ind;
-	d_css += ind;
-	d_iss[0] = 0;
-//      printf("%d %d %d %d %d %d", d_iss[0], d_len, pattern_length, d, q, p);
-	int pw = 1;
-	for (; i < pattern_length; i++) {
-		d_iss[0] += pw * (d_css[i]);
-		pw *= d;
-	}
-	//d_iss[0] %= q;
-	//printf("%d ", d_iss[0]);
-
-	for (i = 1; i < d_len - pattern_length + 1; i++) {
-		d_iss[i] = ((d_css[i + pattern_length - 1]) * p
-			    + (d_iss[i - 1] - (d_css[i - 1])) / d); //% q;
-        //printf("%d ",d_iss[i]);
-	}
-
-}
-
-__global__ void seekPattern(char *d_css, int d_len, int *d_iss,
-                int pattern_length, char* pattern, int d, int p0) 
-{
-	int i = 0;
-        int j=0;
-	int ind = d_len * threadIdx.x;
-	d_iss += ind;
-	d_css += ind;
-
-	for (i = 0; i < d_len - pattern_length + 1; i++) {
-		if (d_iss[i] == p0) {
-			for (j = 0; j < pattern_length; j++) {
-				if (pattern[j] != d_css[i + j]) {
-					break;
-				} else if (j == pattern_length - 1) {
-
-			//		printf("ThreadId: %d\n", threadIdx.x);
-					printf("pos:%d\n", threadIdx.x*(d_len-pattern_length+1)+i-pattern_length+1);
-				}
-			}
-		}
-	}
-
-}
-int main(int argc, char *argv[])
-{
-	int i = 0;
-	int j = 0;
-	char str[] = "bababanaparaverbababanaparaverbababanaparaverbababanaparaverbababanaparaverbababanaparaverbababanaparaver";
-	char pattern[] = "aba";
-	int d = 3;
-	//int q = 50000;
-	int num_cores = 8;
-
-	//CHECK(cudaDeviceReset());
-
-	int str_length = strlen(str);
-	//int nElem=str_length;
-	int pattern_length = strlen(pattern);
-	int chunk_len = (int)ceil((float)str_length / num_cores);
-	int padding_len = chunk_len * num_cores - str_length;
-	int el_chunk_len = chunk_len + pattern_length - 1;
-
-	//matrix on host which holds the characters, each row will go to a core
-	char css[num_cores][el_chunk_len];
-	int iss[num_cores][el_chunk_len];
-
-	char *d_css;
-    char *d_pattern;
-	
-	int *d_iss;
-	int nchars = num_cores * el_chunk_len;
-	cudaMalloc((char **)&d_css, nchars * sizeof(char));
-	cudaMalloc((int **)&d_iss, nchars * sizeof(int));
-        cudaMalloc((char **)&d_pattern, pattern_length*sizeof(char));
-
-	
-	for (i = 0; i < pattern_length - 1; i++)
-		css[0][i] = 0;
-
-	
-	for (i = 0; i < num_cores - 1; i++)
-		for (j = 0; j < chunk_len; j++)
-			css[i][j + pattern_length - 1] = str[i * chunk_len + j];
-
-
-	for (i = (num_cores - 1) * chunk_len, j = 0; i < str_length; i++, j++)
-		css[num_cores - 1][j + pattern_length - 1] = str[i];
-
-	
-	for (i = 1; i < num_cores; i++)
-		for (j = 0; j < pattern_length - 1; j++)
-			css[i][j] = css[i - 1][j + chunk_len];
-
-	
-	for (i = 0; i < padding_len; i++)
-		css[num_cores - 1][el_chunk_len - i - 1] = 0;
-
-	cudaMemcpy(d_css, css, nchars, cudaMemcpyHostToDevice);
-	cudaMemcpy(d_css, css, nchars, cudaMemcpyHostToDevice);
-	cudaMemcpy(d_pattern, pattern, pattern_length, cudaMemcpyHostToDevice);
-
-	dim3 block(num_cores);
-	//__global__ void findHashes(char *d_css, int d_len, int *d_iss, int pattern_length, int d, int q, int p)
-	int p = pow(d, pattern_length - 1);
-	findHashes <<< 1, num_cores >>> (d_css, el_chunk_len, d_iss,
-					 pattern_length, d, /*q,*/ p);
-
-        
-        int pw = 1;
-        int p0=0;
-        for (i=0; i < pattern_length; i++) {
-            p0 += pw * (pattern[i]);
-            pw *= d;
+        k = f[i - 1];
+        while (k >= 0)
+        {
+            if (pattern[k] == pattern[i - 1])
+                break;
+            else
+                k = f[k];
         }
-	//printf("%d\n", p0);
-        
-        seekPattern<<<1, num_cores>>>(d_css, el_chunk_len, d_iss,
-                pattern_length, d_pattern, d, p0); 
+        f[i] = k + 1;
+    }
+}
+ 
+__global__ void KMP(char* pattern, char* target,int f[],int c[],int n, int m)
+{
+    int index = blockIdx.x*blockDim.x + threadIdx.x;
+    int i = n * index;
+    int j = n * (index + 2)-1;
+    if(i>m)
+        return;
+    if(j>m)
+        j=m;
+    int k = 0;        
+    while (i < j)
+    {
+        if (k == -1)
+        {
+            i++;
+            k = 0;
+        }
+        else if (target[i] == pattern[k])
+        {
+            i++;
+            k++;
+            if (k == n)
+            {
+                c[i - n] = i-n;
+                i = i - k + 1;
+            }
+        }
+        else
+            k = f[k];
+    }
+    return;
+}
+ 
+int main(int argc, char* argv[])
+{
+    const int L = 40000000;
+    const int S = 40000000;
+    int M = 1024;//num of threads
 
-	//printf("%d %d %d %d %d \n", el_chunk_len, pattern_length, d, q, p);
+    int cSize = 4;//size of char is 1, but size of 'a' is 4
 
-	//cudaMemcpy(iss, d_iss, nchars * sizeof(int), cudaMemcpyDeviceToHost);
-	/*for (i=0;i<num_cores;i++)
-	   {
-	   for (j=0;j<el_chunk_len;j++)
-	   	printf("%d ", iss[i][j]);
-	   printf("\n");
-	   } 
-	*/
-	cudaFree(d_iss);
-	cudaFree(d_css);
+    char *tar;
+    char *pat;
+    tar = (char*)malloc(L*cSize);
+    pat = (char*)malloc(S*cSize);
+    char *d_tar;
+    char *d_pat;
+    ifstream f1;
+    ofstream f2;
 
-	//int pos = rk_matcher(str, pattern, d, q);
-	//printf("%d", pos);
-	return 0;
+    f1.open(argv[1]);
+    f2.open("output.txt");
+
+    f1>>tar>>pat;
+
+    int m = strlen(tar);
+    int n = strlen(pat);
+    printf("%d %d\n",m,n);
+    int *f;
+    int *c;
+
+    f = new int[m];
+    c = new int[m];
+
+    int *d_f;
+    int *d_c;
+    for(int i = 0;i<m; i++)
+    {
+        c[i] = -1;
+    }     
+    preKMP(pat, f);
+    printf("----Start copying data to GPU----\n");
+    time_t rawtime1;
+    time ( &rawtime1 );
+    cudaMalloc((void **)&d_tar, m*cSize);
+    cudaMalloc((void **)&d_pat, n*cSize);
+    cudaMalloc((void **)&d_f, m*cSize);
+    cudaMalloc((void **)&d_c, m*cSize);
+
+    cudaMemcpy(d_tar, tar, m*cSize, cudaMemcpyHostToDevice);
+    cudaMemcpy(d_pat, pat, n*cSize, cudaMemcpyHostToDevice);
+    cudaMemcpy(d_f, f, m*cSize, cudaMemcpyHostToDevice);
+    cudaMemcpy(d_c, c, m*cSize, cudaMemcpyHostToDevice);
+    time_t rawtime2;
+    time ( &rawtime2 );
+    printf("----Data copied to GPU successfully---- Takes %f seconds\n", difftime(rawtime2,rawtime1));
+    if(n>10000000)
+        M = 128;
+
+
+    float time_elapsed=0;
+    cudaEvent_t start,stop;
+    cudaEventCreate(&start);    
+    cudaEventCreate(&stop);
+
+    cudaEventRecord( start,0);   
+    KMP<<<(m/n+M)/M,M>>>(d_pat, d_tar ,d_f, d_c, n, m);
+    cudaEventRecord( stop,0);   
+ 
+    cudaEventSynchronize(start);    
+    cudaEventSynchronize(stop);   
+    cudaEventElapsedTime(&time_elapsed,start,stop);   
+
+
+    printf("----String matching done---- Takes %f s\n", time_elapsed/1000);  
+    
+    cudaMemcpy(c, d_c, m*cSize, cudaMemcpyDeviceToHost);
+
+    for(int i = 0;i<m; i++)
+    { 
+        if(c[i]!=-1)
+        {
+            f2<<i<<' '<<c[i]<<'\n';
+        }
+    }
+    time_t rawtime4;
+    time ( &rawtime4 );
+    printf("----Task done---- Takes %f seconds in total\n", difftime(rawtime4,rawtime1));
+    cudaFree(d_tar); cudaFree(d_pat); cudaFree(d_f); cudaFree(d_c);
+    return 0;
 }
