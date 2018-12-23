@@ -89,7 +89,7 @@ int main(int argc, char* argv[])
     KMP(pat, tar,f,c);
     
     end = clock();
-    printf("----String matching done---- Takes %f ms\n", (end - start) );  
+    printf("----String matching done---- Takes %Lf ms\n", (long double)(end - start) );  
 
     for(int i = 0;i<m; i++)
     { 
